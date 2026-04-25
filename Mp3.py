@@ -1,11 +1,20 @@
-
+import tkinter as tk
+import pygame  
 class Running:
     def __init__(self, root):
-        
-        
-    def load_music(self):
-        
+        pygame.mixer.init()  
 
+        self.root = root
+        self.root.title("Music Player")  
+        self.root.geometry("1000x700")
+        self.root.configure(bg="white")
+        
+        
+    def load_song(self):
+         file = filedialog.askopenfilename(filetypes=[("MP3 Files", "*.mp3")])
+         if file:
+            self.current_song = file
+            self.label.config(text=file)
     def play_music(self):
         
 
