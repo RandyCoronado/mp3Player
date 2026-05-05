@@ -24,24 +24,24 @@ class Running:
         self.running = True
 
         # Colors
-        self.bg_color = (18, 18, 18)
-        self.sidebar_color = (0, 0, 0)
-        self.panel_color = (24, 24, 24)
-        self.card_color = (32, 32, 32)
-        self.card_hover_color = (41, 41, 41)
-        self.card_elevated_color = (26, 26, 26)
-        self.accent_color = (30, 215, 96)
-        self.soft_accent = (73, 232, 128)
-        self.accent_glow_color = (22, 120, 60)
-        self.text_color = (255, 255, 255)
-        self.subtext_color = (179, 179, 179)
-        self.muted_text_color = (138, 138, 138)
-        self.success_color = (30, 215, 96)
-        self.warning_color = (245, 155, 35)
-        self.border_color = (44, 44, 44)
-        self.scroll_track_color = (44, 44, 44)
-        self.scroll_thumb_color = (179, 179, 179)
-        self.bottom_bar_color = (24, 24, 24)
+        self.bg_color = (15, 20, 28)
+        self.sidebar_color = (20, 27, 36)
+        self.panel_color = (28, 36, 48)
+        self.card_color = (36, 46, 61)
+        self.card_hover_color = (45, 57, 74)
+        self.card_elevated_color = (24, 32, 43)
+        self.accent_color = (255, 142, 83)
+        self.soft_accent = (255, 177, 118)
+        self.accent_glow_color = (142, 89, 56)
+        self.text_color = (245, 247, 250)
+        self.subtext_color = (186, 194, 206)
+        self.muted_text_color = (130, 142, 158)
+        self.success_color = (109, 214, 156)
+        self.warning_color = (255, 193, 94)
+        self.border_color = (58, 70, 88)
+        self.scroll_track_color = (57, 69, 86)
+        self.scroll_thumb_color = (190, 198, 208)
+        self.bottom_bar_color = (22, 29, 39)
 
         # Fonts
         self.title_font = pygame.font.SysFont("helvetica neue", 30, bold=True)
@@ -312,9 +312,7 @@ class Running:
 
         self.load_song(next_path, autoplay=True)
 
-    # --------------------------
     # THREAD 1: queue control
-    # --------------------------
     def queue_worker(self):
         while not self.stop_event.is_set():
             try:
@@ -336,9 +334,8 @@ class Running:
             except queue.Empty:
                 pass
 
-    # --------------------------
+    
     # THREAD 2: playback logic
-    # --------------------------
     def playback_worker(self):
         while not self.stop_event.is_set():
             try:
@@ -382,9 +379,7 @@ class Running:
             except queue.Empty:
                 pass
 
-    # --------------------------
     # THREAD 3: timer updates
-    # --------------------------
     def timer_worker(self):
         while not self.stop_event.is_set():
             time.sleep(1)
@@ -408,9 +403,7 @@ class Running:
                 if not pygame.mixer.music.get_busy():
                     self.load_next_song()
 
-    # --------------------------
     # THREAD 4: album art fetching
-    # --------------------------
     def album_art_worker(self):
         while not self.stop_event.is_set():
             try:
@@ -574,12 +567,12 @@ class Running:
         pygame.draw.rect(self.screen, self.bottom_bar_color, (0, 528, 980, 112))
         pygame.draw.line(self.screen, self.border_color, (0, 528), (980, 528), 1)
 
-        self.draw_text("Recently Played", self.body_font, self.text_color, 28, 28)
-        self.draw_text("Your local history", self.small_font, self.muted_text_color, 28, 58)
+        self.draw_text("Recent Tracks", self.body_font, self.text_color, 28, 28)
+        self.draw_text("Your listening history", self.small_font, self.muted_text_color, 28, 58)
         self.draw_play_history(play_history)
-        self.draw_text("NOW PLAYING", self.small_font, self.muted_text_color, 268, 48)
-        self.draw_text("UP NEXT", self.small_font, self.muted_text_color, 676, 48)
-        self.draw_text("Desktop mix for local tracks", self.small_font, self.subtext_color, 264, 448)
+        self.draw_text("CURRENT TRACK", self.small_font, self.muted_text_color, 268, 48)
+        self.draw_text("PLAY QUEUE", self.small_font, self.muted_text_color, 676, 48)
+        self.draw_text("Desktop player for your local library", self.small_font, self.subtext_color, 264, 448)
 
         self.draw_card_shadow(self.hero_rect, 22)
         pygame.draw.rect(self.screen, self.card_color, self.hero_rect, border_radius=22)
@@ -597,7 +590,7 @@ class Running:
 
         self.draw_text(current_song, self.header_font, self.text_color, 292, 328, max_width=320)
         self.draw_text(current_artist, self.body_font, self.subtext_color, 292, 362, max_width=320)
-        self.draw_text("LOCAL TRACK", self.small_font, self.accent_color, 292, 392)
+        self.draw_text("FILE PLAYBACK", self.small_font, self.accent_color, 292, 392)
 
         if status == "playing":
             state_text = "Playing"
