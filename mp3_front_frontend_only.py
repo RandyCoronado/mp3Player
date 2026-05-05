@@ -3,6 +3,7 @@ import threading
 import queue
 import time
 import os
+import sys
 import requests
 import subprocess
 from io import BytesIO
@@ -95,9 +96,8 @@ class Running:
         self.buttons = {
             "load": pygame.Rect(318, 557, 118, 42),
             "play": pygame.Rect(450, 548, 52, 52),
-            "pause": pygame.Rect(516, 557, 118, 42),
-            "queue": pygame.Rect(648, 557, 118, 42),
-            "next": pygame.Rect(780, 557, 118, 42),
+            "queue": pygame.Rect(544, 557, 118, 42),
+            "next": pygame.Rect(676, 557, 118, 42),
         }
         self.progress_bar_rect = pygame.Rect(438, 610, 268, 6)
         self.volume_bar_rect = pygame.Rect(250, 610, 120, 6)
@@ -126,23 +126,62 @@ class Running:
         pygame.quit()
 
     def choose_mp3_file(self):
+        """Open a native MP3 file picker.
+
+        macOS: use AppleScript because Tkinter can crash or hang when opened
+        from inside a Pygame event loop on some Apple Python installs.
+        Windows/Linux: use Tkinter, which is the most reliable built-in picker there.
+        """
+        if sys.platform == "darwin":
+            return self.choose_mp3_file_macos()
+        return self.choose_mp3_file_tk()
+
+    def choose_mp3_file_macos(self):
         try:
             script = '''
-            set chosenFile to choose file of type {"mp3"} with prompt "Choose an MP3 file"
-            POSIX path of chosenFile
+            set chosenFile to choose file with prompt "Choose an MP3 file" of type {"mp3", "public.mp3", "public.audio"}
+            return POSIX path of chosenFile
             '''
             result = subprocess.run(
-                ["osascript", "-e", script],
+                ["/usr/bin/osascript", "-e", script],
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=60
             )
-
             if result.returncode == 0:
-                return result.stdout.strip()
-
+                path = result.stdout.strip()
+                if path and os.path.isfile(path):
+                    return path
+            elif result.stderr.strip():
+                print("File picker cancelled or failed:", result.stderr.strip())
         except Exception as e:
-            print("File picker error:", e)
+            print("macOS file picker error:", e)
+        return None
 
+    def choose_mp3_file_tk(self):
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.update_idletasks()
+            try:
+                root.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+
+            file_path = filedialog.askopenfilename(
+                parent=root,
+                title="Choose an MP3 file",
+                filetypes=[("MP3 files", "*.mp3"), ("Audio files", "*.mp3 *.wav *.ogg"), ("All files", "*.*")]
+            )
+            root.destroy()
+
+            if file_path and os.path.isfile(file_path):
+                return file_path
+        except Exception as e:
+            print("Tk file picker error:", e)
         return None
 
     def song_name_from_path(self, path):
@@ -458,16 +497,16 @@ class Running:
                             self.queue_commands.put(("load", path))
 
                     elif self.buttons["play"].collidepoint(mouse_pos):
-                        self.playback_commands.put("play")
-
-                    elif self.buttons["pause"].collidepoint(mouse_pos):
                         with self.lock:
                             paused = self.status == "paused"
+                            playing = self.status == "playing"
 
-                        if paused:
+                        if playing:
+                            self.playback_commands.put("pause")
+                        elif paused:
                             self.playback_commands.put("resume")
                         else:
-                            self.playback_commands.put("pause")
+                            self.playback_commands.put("play")
 
                     elif self.buttons["queue"].collidepoint(mouse_pos):
                         path = self.choose_mp3_file()
@@ -708,7 +747,6 @@ class Running:
         labels = {
             "load": "Load",
             "play": "",
-            "pause": "Resume" if status == "paused" else "Pause",
             "queue": "Queue",
             "next": "Next",
         }
@@ -719,7 +757,10 @@ class Running:
             if key == "play":
                 fill = self.soft_accent if rect.collidepoint(mouse_pos) else self.accent_color
                 pygame.draw.ellipse(self.screen, fill, rect)
-                self.draw_play_icon(rect)
+                if status == "playing":
+                    self.draw_pause_icon(rect)
+                else:
+                    self.draw_play_icon(rect)
                 continue
 
             fill = self.card_hover_color if rect.collidepoint(mouse_pos) else self.card_elevated_color
@@ -739,6 +780,12 @@ class Running:
                 (rect.x + 20, rect.bottom - 14),
             ],
         )
+
+    def draw_pause_icon(self, rect):
+        left_bar = pygame.Rect(rect.x + 17, rect.y + 14, 7, 24)
+        right_bar = pygame.Rect(rect.x + 29, rect.y + 14, 7, 24)
+        pygame.draw.rect(self.screen, (0, 0, 0), left_bar, border_radius=3)
+        pygame.draw.rect(self.screen, (0, 0, 0), right_bar, border_radius=3)
 
     def draw_bottom_now_playing(self, current_song, current_artist, album_art_surface):
         mini_art_rect = pygame.Rect(18, 546, 76, 76)

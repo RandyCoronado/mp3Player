@@ -40,7 +40,6 @@ class Running:
         self.scroll_thumb_color = (179, 179, 179)
         self.bottom_bar_color = (24, 24, 24)
 
-        # Fonts
         self.title_font = pygame.font.SysFont("helvetica neue", 30, bold=True)
         self.header_font = pygame.font.SysFont("helvetica neue", 26, bold=True)
         self.body_font = pygame.font.SysFont("helvetica neue", 20)
@@ -55,7 +54,6 @@ class Running:
         self.playback_commands = queue.Queue()
         self.album_art_commands = queue.Queue()
 
-        # Player state
         self.current_song = "No song loaded"
         self.current_artist = "Choose an MP3 file"
         self.current_path = None
@@ -70,7 +68,6 @@ class Running:
 
         self.album_art_surface = None
 
-        # Queue stores file paths
         self.song_queue = []
 
         # Queue UI
