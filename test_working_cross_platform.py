@@ -3,17 +3,9 @@ import threading
 import queue
 import time
 import os
-import requests
 import sys
-import platform
-
-try:
-    import tkinter as tk
-    from tkinter import filedialog
-except Exception:
-    tk = None
-    filedialog = None
-
+import requests
+import subprocess
 from io import BytesIO
 from PIL import Image
 
@@ -124,63 +116,66 @@ class Running:
         pygame.quit()
 
     def choose_mp3_file(self):
-        """Open a native file picker on Windows and macOS.
+        """Open a native MP3 file picker.
 
-        The previous version used macOS-only AppleScript through `osascript`.
-        Windows does not include `osascript`, which causes:
-            [WinError 2] The system cannot find the file specified
-
-        Tkinter is included with most Python installers on both Windows and macOS,
-        so this keeps the same code path for both platforms.
+        macOS: use AppleScript because Tkinter can crash or hang when opened
+        from inside a Pygame event loop on some Apple Python installs.
+        Windows/Linux: use Tkinter, which is the most reliable built-in picker there.
         """
-        if tk is None or filedialog is None:
-            print("File picker error: tkinter is not available in this Python install.")
-            return None
+        if sys.platform == "darwin":
+            return self.choose_mp3_file_macos()
+        return self.choose_mp3_file_tk()
 
-        picker_root = None
+    def choose_mp3_file_macos(self):
         try:
-            picker_root = tk.Tk()
-            picker_root.withdraw()
+            script = '''
+            set chosenFile to choose file with prompt "Choose an MP3 file" of type {"mp3", "public.mp3", "public.audio"}
+            return POSIX path of chosenFile
+            '''
+            result = subprocess.run(
+                ["/usr/bin/osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if result.returncode == 0:
+                path = result.stdout.strip()
+                if path and os.path.isfile(path):
+                    return path
+            elif result.stderr.strip():
+                print("File picker cancelled or failed:", result.stderr.strip())
+        except Exception as e:
+            print("macOS file picker error:", e)
+        return None
 
-            # Make the dialog appear in front of the Pygame window where supported.
+    def choose_mp3_file_tk(self):
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.update_idletasks()
             try:
-                picker_root.attributes("-topmost", True)
-                picker_root.update()
-            except Exception:
+                root.attributes("-topmost", True)
+            except tk.TclError:
                 pass
 
-            path = filedialog.askopenfilename(
-                parent=picker_root,
-                title="Choose an audio file",
-                filetypes=(
-                    ("Audio files", ("*.mp3", "*.wav", "*.ogg")),
-                    ("MP3 files", ("*.mp3",)),
-                    ("All files", ("*.*",)),
-                ),
+            file_path = filedialog.askopenfilename(
+                parent=root,
+                title="Choose an MP3 file",
+                filetypes=[("MP3 files", "*.mp3"), ("Audio files", "*.mp3 *.wav *.ogg"), ("All files", "*.*")]
             )
+            root.destroy()
 
-            if not path:
-                return None
-
-            path = os.path.abspath(os.path.expanduser(path))
-            if not os.path.isfile(path):
-                print("File picker error: selected path is not a file:", path)
-                return None
-
-            return os.path.normpath(path)
-
+            if file_path and os.path.isfile(file_path):
+                return file_path
         except Exception as e:
-            print("File picker error:", e)
-            return None
-        finally:
-            if picker_root is not None:
-                try:
-                    picker_root.destroy()
-                except Exception:
-                    pass
+            print("Tk file picker error:", e)
+        return None
 
     def song_name_from_path(self, path):
-        return os.path.splitext(os.path.basename(path))[0]
+        return os.path.basename(path).replace(".mp3", "")
 
     def format_time(self, seconds):
         seconds = max(0, int(seconds))
