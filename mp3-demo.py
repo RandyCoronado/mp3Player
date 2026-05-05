@@ -2,10 +2,10 @@ import io
 import json
 import os
 import queue
+import subprocess
+import sys
 import threading
 import time
-import tkinter as tk
-from tkinter import filedialog
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
@@ -73,6 +73,10 @@ class Running:
         self.message = "Load plays a file. Queue adds files to Up Next."
         self.art_message = ""
         self.album_art_surface = None
+        self.popup_art_surface = None
+        self.popup_title = ""
+        self.popup_artist = ""
+        self.popup_expires_at = 0
         self.playback_start_offset = 0
         self.waiting_for_next_song = False
 
@@ -122,20 +126,62 @@ class Running:
         pygame.quit()
 
     def choose_files(self, multiple=False):
-        # Tk is only used for the native file picker. Hide its extra window.
+        if sys.platform == "darwin":
+            return self.choose_files_macos(multiple=multiple)
+        return self.choose_files_tk(multiple=multiple)
+
+    def choose_files_macos(self, multiple=False):
+        prompt = "Queue songs" if multiple else "Load song"
+        selection_clause = "with multiple selections allowed" if multiple else ""
+        script = f"""
+        try
+            set chosenFiles to choose file with prompt "{prompt}" of type {{"mp3", "wav", "ogg"}} {selection_clause}
+            if class of chosenFiles is list then
+                set outputText to ""
+                repeat with chosenFile in chosenFiles
+                    set outputText to outputText & POSIX path of chosenFile & linefeed
+                end repeat
+                return outputText
+            end if
+            return POSIX path of chosenFiles
+        on error number -128
+            return ""
+        end try
+        """
+
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return self.choose_files_tk(multiple=multiple)
+
+        return [path for path in result.stdout.splitlines() if path.strip()]
+
+    def choose_files_tk(self, multiple=False):
+        # Tk is only used as a fallback chooser outside macOS.
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except Exception:
+            return []
+
         owns_root = self.root is None
         root = self.root or tk.Tk()
         root.withdraw()
         filetypes = [("Audio files", "*.mp3 *.wav *.ogg"), ("All files", "*.*")]
-        if multiple:
-            paths = filedialog.askopenfilenames(title="Queue songs", filetypes=filetypes)
-            result = list(paths)
-        else:
+        try:
+            if multiple:
+                paths = filedialog.askopenfilenames(title="Queue songs", filetypes=filetypes)
+                return list(paths)
             path = filedialog.askopenfilename(title="Load song", filetypes=filetypes)
-            result = [path] if path else []
-        if owns_root:
-            root.destroy()
-        return result
+            return [path] if path else []
+        finally:
+            if owns_root:
+                root.destroy()
 
     def format_time(self, seconds):
         seconds = max(0, int(seconds or 0))
@@ -194,6 +240,21 @@ class Running:
             return pygame.transform.smoothscale(surface, (220, 220))
         except Exception:
             return None
+
+    def popup_surface_from_surface(self, surface):
+        if surface is None:
+            return None
+        return pygame.transform.smoothscale(surface, (300, 300))
+
+    def show_album_art_popup(self, title, artist, surface):
+        popup_surface = self.popup_surface_from_surface(surface)
+        if popup_surface is None:
+            return
+        with self.lock:
+            self.popup_art_surface = popup_surface
+            self.popup_title = title or "Unknown Title"
+            self.popup_artist = artist or "Unknown Artist"
+            self.popup_expires_at = time.time() + 3.5
 
     def is_generic_artist(self, artist):
         return not artist or str(artist).strip().lower() in {
@@ -288,6 +349,11 @@ class Running:
                     if surface:
                         self.album_art_surface = surface
                         self.art_message = "Album art loaded from iTunes."
+                        self.show_album_art_popup(
+                            itunes.get("title") or self.current_song,
+                            itunes.get("artist") or self.current_artist,
+                            surface,
+                        )
                     else:
                         if not self.album_art_surface:
                             self.art_message = "No iTunes artwork found."
@@ -324,6 +390,8 @@ class Running:
                 self.art_message = "Using embedded album art." if art_surface else "Searching iTunes for album art..."
                 self.status = "playing"
                 self.message = f"Playing: {self.current_song}"
+            if art_surface:
+                self.show_album_art_popup(meta["title"], meta["artist"], art_surface)
             # Ask iTunes for missing artwork and/or a better artist name.
             if (not art_surface) or self.is_generic_artist(meta["artist"]):
                 self.request_itunes_metadata(path, meta["title"], meta["artist"], target="current")
@@ -346,6 +414,8 @@ class Running:
                 self.current_time = "00:00"
                 self.total_time = "00:00"
                 self.album_art_surface = None
+                self.popup_art_surface = None
+                self.popup_expires_at = 0
                 self.status = "idle"
                 self.message = "Queue is empty."
                 return
@@ -571,6 +641,10 @@ class Running:
             queue_items = [item.copy() for item in self.queue_items]
             message = self.message
             album_art_surface = self.album_art_surface
+            popup_art_surface = self.popup_art_surface
+            popup_title = self.popup_title
+            popup_artist = self.popup_artist
+            popup_expires_at = self.popup_expires_at
 
         pygame.draw.rect(self.screen, self.panel_color, (30, 24, 920, 70), border_radius=24)
         self.draw_text("MP3 Player", self.title_font, self.text_color, 55, 42)
@@ -619,6 +693,16 @@ class Running:
 
         pygame.draw.rect(self.screen, self.panel_color, (30, 490, 920, 120), border_radius=28)
         self.draw_buttons(status)
+
+        if popup_art_surface and time.time() < popup_expires_at:
+            self.draw_album_art_popup(popup_art_surface, popup_title, popup_artist)
+        elif popup_art_surface:
+            with self.lock:
+                if self.popup_expires_at == popup_expires_at:
+                    self.popup_art_surface = None
+                    self.popup_title = ""
+                    self.popup_artist = ""
+                    self.popup_expires_at = 0
 
     def draw_queue_list(self, queue_items):
         old_clip = self.screen.get_clip()
@@ -679,6 +763,21 @@ class Running:
             text_surface = self.button_font.render(labels[key], True, self.text_color)
             text_rect = text_surface.get_rect(center=rect.center)
             self.screen.blit(text_surface, text_rect)
+
+    def draw_album_art_popup(self, popup_art_surface, popup_title, popup_artist):
+        overlay = pygame.Surface((980, 640), pygame.SRCALPHA)
+        overlay.fill((6, 10, 18, 168))
+        self.screen.blit(overlay, (0, 0))
+
+        popup_rect = pygame.Rect(290, 90, 400, 460)
+        pygame.draw.rect(self.screen, self.panel_color, popup_rect, border_radius=28)
+        pygame.draw.rect(self.screen, self.border_color, popup_rect, width=2, border_radius=28)
+
+        art_rect = popup_art_surface.get_rect(center=(popup_rect.centerx, popup_rect.y + 180))
+        self.screen.blit(popup_art_surface, art_rect)
+        self.draw_text("Now Playing", self.small_font, self.soft_accent, popup_rect.x + 145, popup_rect.y + 26)
+        self.draw_text(popup_title, self.header_font, self.text_color, popup_rect.x + 35, popup_rect.y + 350, max_width=330)
+        self.draw_text(popup_artist, self.body_font, self.subtext_color, popup_rect.x + 35, popup_rect.y + 392, max_width=330)
 
     def draw_text(self, text, font, color, x, y, max_width=None):
         text = str(text)
