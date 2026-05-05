@@ -4,9 +4,8 @@ import queue
 import time
 import os
 import requests
+import sys
 import platform
-from io import BytesIO
-from PIL import Image
 
 try:
     import tkinter as tk
@@ -15,6 +14,9 @@ except Exception:
     tk = None
     filedialog = None
 
+from io import BytesIO
+from PIL import Image
+
 
 class Running:
     def __init__(self, root=None):
@@ -22,11 +24,7 @@ class Running:
 
         pygame.init()
         pygame.font.init()
-        try:
-            pygame.mixer.init()
-        except pygame.error as e:
-            print("Audio mixer init error:", e)
-
+        pygame.mixer.init()
 
         self.screen = pygame.display.set_mode((980, 640))
         pygame.display.set_caption("MP3 Player")
@@ -126,37 +124,60 @@ class Running:
         pygame.quit()
 
     def choose_mp3_file(self):
-        # Cross-platform file picker for Windows and macOS.
-        # The old version used macOS-only osascript, which causes
-        # [WinError 2] on Windows because osascript does not exist there.
+        """Open a native file picker on Windows and macOS.
+
+        The previous version used macOS-only AppleScript through `osascript`.
+        Windows does not include `osascript`, which causes:
+            [WinError 2] The system cannot find the file specified
+
+        Tkinter is included with most Python installers on both Windows and macOS,
+        so this keeps the same code path for both platforms.
+        """
         if tk is None or filedialog is None:
             print("File picker error: tkinter is not available in this Python install.")
             return None
 
+        picker_root = None
         try:
-            # Hide the temporary Tk window so only the file dialog appears.
             picker_root = tk.Tk()
             picker_root.withdraw()
-            picker_root.attributes("-topmost", True)
+
+            # Make the dialog appear in front of the Pygame window where supported.
+            try:
+                picker_root.attributes("-topmost", True)
+                picker_root.update()
+            except Exception:
+                pass
 
             path = filedialog.askopenfilename(
-                title="Choose an MP3 file",
-                filetypes=[
-                    ("Audio files", "*.mp3 *.wav *.ogg"),
-                    ("MP3 files", "*.mp3"),
-                    ("All files", "*.*"),
-                ],
+                parent=picker_root,
+                title="Choose an audio file",
+                filetypes=(
+                    ("Audio files", ("*.mp3", "*.wav", "*.ogg")),
+                    ("MP3 files", ("*.mp3",)),
+                    ("All files", ("*.*",)),
+                ),
             )
 
-            picker_root.destroy()
+            if not path:
+                return None
 
-            if path:
-                return os.path.normpath(path)
+            path = os.path.abspath(os.path.expanduser(path))
+            if not os.path.isfile(path):
+                print("File picker error: selected path is not a file:", path)
+                return None
+
+            return os.path.normpath(path)
 
         except Exception as e:
             print("File picker error:", e)
-
-        return None
+            return None
+        finally:
+            if picker_root is not None:
+                try:
+                    picker_root.destroy()
+                except Exception:
+                    pass
 
     def song_name_from_path(self, path):
         return os.path.splitext(os.path.basename(path))[0]
