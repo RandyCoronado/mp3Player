@@ -1,40 +1,28 @@
 import pygame
+import threading
+import queue
+import time
+import os
+import requests
+import subprocess
+from io import BytesIO
+from PIL import Image
 
 
 class Running:
-    def __init__(self, root):
-        """
-        Frontend-only pygame setup.
-
-        What this does:
-        - creates the window
-        - stores colors, fonts, and layout
-        - runs the event loop
-        - draws a mock MP3 player interface
-
-        What this does NOT do yet:
-        - real music playback
-        - real file loading
-        - real timers
-        - real album art fetching
-        - no threads
-
-        """
-        # root is kept only to match the required class structure.
+    def __init__(self, root=None):
         self.root = root
 
         pygame.init()
         pygame.font.init()
+        pygame.mixer.init()
 
-        # Window setup
-        self.screen_width = 980
-        self.screen_height = 640
-        self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+        self.screen = pygame.display.set_mode((980, 640))
         pygame.display.set_caption("MP3 Player")
         self.clock = pygame.time.Clock()
         self.running = True
 
-        # Colors used for the clean dark UI
+        # Colors
         self.bg_color = (14, 18, 28)
         self.panel_color = (24, 30, 45)
         self.card_color = (32, 40, 58)
@@ -48,31 +36,37 @@ class Running:
         self.scroll_track_color = (19, 24, 37)
         self.scroll_thumb_color = (150, 156, 168)
 
-        # Fonts for readability
+        # Fonts
         self.title_font = pygame.font.SysFont("arial", 34, bold=True)
         self.header_font = pygame.font.SysFont("arial", 24, bold=True)
         self.body_font = pygame.font.SysFont("arial", 20)
         self.small_font = pygame.font.SysFont("arial", 16)
         self.button_font = pygame.font.SysFont("arial", 22, bold=True)
 
-        # Frontend-only preview data
-        self.current_song = "No song loaded"
-        self.current_artist = "Frontend preview only"
-        self.current_time = "00:00"
-        self.total_time = "03:42"
-        self.is_paused = False
-        self.queue_items = [
-            "Midnight Drive",
-            "Ocean Echo",
-            "Neon Sunset",
-            "City Lights",
-            "Blue Horizon",
-            "Afterglow",
-            "Skyline Run",
-            "Golden Waves",
-        ]
+        # Threads
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
 
-        # Queue layout
+        self.queue_commands = queue.Queue()
+        self.playback_commands = queue.Queue()
+        self.album_art_commands = queue.Queue()
+
+        # Player state
+        self.current_song = "No song loaded"
+        self.current_artist = "Choose an MP3 file"
+        self.current_path = None
+        self.current_time = "00:00"
+        self.total_time = "--:--"
+        self.song_length = 1
+        self.position = 0
+        self.status = "idle"
+
+        self.album_art_surface = None
+
+        # Queue stores file paths
+        self.song_queue = []
+
+        # Queue UI
         self.queue_scroll_index = 0
         self.visible_queue_count = 4
         self.queue_card_rect = pygame.Rect(650, 112, 300, 360)
@@ -83,7 +77,7 @@ class Running:
         self.queue_item_height = 58
         self.queue_item_gap = 14
 
-        # Large tap-friendly buttons
+        # Buttons
         self.buttons = {
             "load": pygame.Rect(60, 510, 140, 72),
             "play": pygame.Rect(220, 510, 140, 72),
@@ -92,121 +86,267 @@ class Running:
             "next": pygame.Rect(700, 510, 140, 72),
         }
 
-        # Main frontend loop
+        self.queue_thread = threading.Thread(target=self.queue_worker, daemon=True)
+        self.playback_thread = threading.Thread(target=self.playback_worker, daemon=True)
+        self.timer_thread = threading.Thread(target=self.timer_worker, daemon=True)
+        self.album_art_thread = threading.Thread(target=self.album_art_worker, daemon=True)
+
+        self.queue_thread.start()
+        self.playback_thread.start()
+        self.timer_thread.start()
+        self.album_art_thread.start()
+
         while self.running:
             self.handle_events()
             self.draw_ui()
             pygame.display.flip()
             self.clock.tick(60)
 
+        self.shutdown()
         pygame.quit()
 
-    def load_music(self):
-        """
-        Frontend placeholder.
+    def choose_mp3_file(self):
+        try:
+            script = '''
+            set chosenFile to choose file of type {"mp3"} with prompt "Choose an MP3 file"
+            POSIX path of chosenFile
+            '''
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True
+            )
 
-        This only changes the text on screen so people can tell
-        where loaded song info would appear later.
-        """
-        self.current_song = "Loaded Song Preview"
-        self.current_artist = "UI placeholder only"
+            if result.returncode == 0:
+                return result.stdout.strip()
 
-    def play_music(self):
-        """
-        Frontend placeholder.
+        except Exception as e:
+            print("File picker error:", e)
 
-        This does not play real audio.
-        It only changes the preview state.
-        """
-        self.is_paused = False
+        return None
 
-    def updateTimer(self):
-        """
-        Frontend placeholder.
+    def song_name_from_path(self, path):
+        return os.path.basename(path).replace(".mp3", "")
 
-        A real version would update the playback time.
-        Kept empty on purpose for the frontend-only version.
-        """
-        pass
-
-    def pause_music(self):
-        """
-        Frontend placeholder.
-
-        This does not pause real audio.
-        It only changes the preview state.
-        """
-        self.is_paused = True
-
-    def unpause_music(self):
-        """
-        Frontend placeholder.
-
-        This does not resume real audio.
-        It only changes the preview state.
-        """
-        self.is_paused = False
-
-    def queue_music(self):
-        """
-        Frontend placeholder.
-
-        This adds a fake song into the visual queue so the list
-        can be tested without real MP3 logic.
-        """
-        self.queue_items.append(f"Preview Song {len(self.queue_items) + 1}")
-        self.scroll_to_bottom()
-
-    def next_song(self):
-        """
-        Frontend placeholder.
-
-        This visually moves to the next fake queued song.
-        No real playback happens here.
-        """
-        if self.queue_items:
-            self.current_song = self.queue_items.pop(0)
-            self.current_artist = "Queue preview only"
-            self.queue_scroll_index = min(self.queue_scroll_index, self.max_scroll_index())
-
-    def fetch_album_art(self, song_query):
-        """
-        Frontend placeholder.
-
-        A real version would search for and load album art.
-        Empty on purpose for the frontend-only version.
-        """
-        pass
-
-    def check_end(self):
-        """
-        Frontend placeholder.
-
-        A real version would detect when a song finishes.
-        Empty on purpose for the frontend-only version.
-        """
-        pass
+    def format_time(self, seconds):
+        seconds = max(0, int(seconds))
+        minutes = seconds // 60
+        seconds = seconds % 60
+        return f"{minutes:02}:{seconds:02}"
 
     def max_scroll_index(self):
-        """Returns the last allowed queue scroll position."""
-        return max(0, len(self.queue_items) - self.visible_queue_count)
+        with self.lock:
+            return max(0, len(self.song_queue) - self.visible_queue_count)
 
     def scroll_queue(self, direction):
-        """Moves the visual queue up or down inside the list box."""
         self.queue_scroll_index = max(
             0,
             min(self.queue_scroll_index + direction, self.max_scroll_index())
         )
 
     def scroll_to_bottom(self):
-        """Keeps newly added preview songs visible."""
         self.queue_scroll_index = self.max_scroll_index()
 
+    def estimate_song_length(self, path):
+        try:
+            sound = pygame.mixer.Sound(path)
+            return max(1, int(sound.get_length()))
+        except Exception:
+            return 1
+
+    def load_song(self, path, autoplay=False):
+        song_name = self.song_name_from_path(path)
+
+        try:
+            pygame.mixer.music.load(path)
+        except Exception as e:
+            print("Could not load song:", e)
+            return
+
+        with self.lock:
+            self.current_path = path
+            self.current_song = song_name
+            self.current_artist = "Loaded MP3"
+            self.position = 0
+            self.current_time = "00:00"
+            self.song_length = self.estimate_song_length(path)
+            self.total_time = self.format_time(self.song_length)
+            self.status = "playing" if autoplay else "paused"
+            self.album_art_surface = None
+
+        self.album_art_commands.put(song_name)
+
+        if autoplay:
+            pygame.mixer.music.play()
+
+    def load_next_song(self):
+        with self.lock:
+            if not self.song_queue:
+                self.current_song = "No song loaded"
+                self.current_artist = "Choose an MP3 file"
+                self.current_path = None
+                self.position = 0
+                self.current_time = "00:00"
+                self.total_time = "--:--"
+                self.status = "idle"
+                self.album_art_surface = None
+                pygame.mixer.music.stop()
+                return
+
+            next_path = self.song_queue.pop(0)
+
+        self.load_song(next_path, autoplay=True)
+
+    # --------------------------
+    # THREAD 1: queue control
+    # --------------------------
+    def queue_worker(self):
+        while not self.stop_event.is_set():
+            try:
+                command, data = self.queue_commands.get(timeout=0.1)
+
+                if command == "load":
+                    self.load_song(data, autoplay=False)
+
+                elif command == "queue":
+                    with self.lock:
+                        self.song_queue.append(data)
+
+                elif command == "next":
+                    self.load_next_song()
+
+                elif command == "quit":
+                    break
+
+            except queue.Empty:
+                pass
+
+    # --------------------------
+    # THREAD 2: playback logic
+    # --------------------------
+    def playback_worker(self):
+        while not self.stop_event.is_set():
+            try:
+                command = self.playback_commands.get(timeout=0.1)
+
+                if command == "play":
+                    with self.lock:
+                        has_song = self.current_path is not None
+                        status = self.status
+
+                    if has_song:
+                        if status == "paused":
+                            pygame.mixer.music.unpause()
+                        else:
+                            pygame.mixer.music.play()
+
+                        with self.lock:
+                            self.status = "playing"
+                    else:
+                        self.load_next_song()
+
+                elif command == "pause":
+                    pygame.mixer.music.pause()
+                    with self.lock:
+                        if self.current_path:
+                            self.status = "paused"
+
+                elif command == "resume":
+                    pygame.mixer.music.unpause()
+                    with self.lock:
+                        if self.current_path:
+                            self.status = "playing"
+
+                elif command == "quit":
+                    break
+
+            except queue.Empty:
+                pass
+
+    # --------------------------
+    # THREAD 3: timer updates
+    # --------------------------
+    def timer_worker(self):
+        while not self.stop_event.is_set():
+            time.sleep(1)
+
+            with self.lock:
+                status = self.status
+                has_song = self.current_path is not None
+
+            if status == "playing" and has_song:
+                pos_ms = pygame.mixer.music.get_pos()
+
+                if pos_ms >= 0:
+                    pos_seconds = pos_ms // 1000
+                    with self.lock:
+                        self.position = pos_seconds
+                        self.current_time = self.format_time(pos_seconds)
+
+                if not pygame.mixer.music.get_busy():
+                    self.load_next_song()
+
+    # --------------------------
+    # THREAD 4: album art fetching
+    # --------------------------
+    def album_art_worker(self):
+        while not self.stop_event.is_set():
+            try:
+                song_query = self.album_art_commands.get(timeout=0.1)
+
+                if song_query == "quit":
+                    break
+
+                response = requests.get(
+                    "https://itunes.apple.com/search",
+                    params={
+                        "term": song_query,
+                        "media": "music",
+                        "entity": "song",
+                        "limit": 1
+                    },
+                    timeout=5
+                )
+
+                data = response.json()
+
+                if data.get("resultCount", 0) > 0:
+                    result = data["results"][0]
+                    artwork_url = result["artworkUrl100"].replace("100x100", "600x600")
+
+                    img_data = requests.get(artwork_url, timeout=5).content
+                    img = Image.open(BytesIO(img_data)).convert("RGB")
+                    img = img.resize((220, 220))
+
+                    surface = pygame.image.fromstring(img.tobytes(), img.size, img.mode)
+
+                    with self.lock:
+                        self.album_art_surface = surface
+                else:
+                    with self.lock:
+                        self.album_art_surface = None
+
+            except queue.Empty:
+                pass
+            except Exception as e:
+                print("Album art error:", e)
+                with self.lock:
+                    self.album_art_surface = None
+
+    def shutdown(self):
+        self.running = False
+        self.stop_event.set()
+
+        self.queue_commands.put(("quit", None))
+        self.playback_commands.put("quit")
+        self.album_art_commands.put("quit")
+
+        self.queue_thread.join(timeout=1)
+        self.playback_thread.join(timeout=1)
+        self.timer_thread.join(timeout=1)
+        self.album_art_thread.join(timeout=1)
+
     def handle_events(self):
-        """
-        Handles clicks and wheel scrolling for the frontend preview.
-        These actions only update the mock interface.
-        """
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
@@ -216,39 +356,56 @@ class Running:
 
                 if event.button == 1:
                     if self.buttons["load"].collidepoint(mouse_pos):
-                        self.load_music()
+                        path = self.choose_mp3_file()
+                        if path:
+                            self.queue_commands.put(("load", path))
+
                     elif self.buttons["play"].collidepoint(mouse_pos):
-                        self.play_music()
+                        self.playback_commands.put("play")
+
                     elif self.buttons["pause"].collidepoint(mouse_pos):
-                        if self.is_paused:
-                            self.unpause_music()
+                        with self.lock:
+                            paused = self.status == "paused"
+
+                        if paused:
+                            self.playback_commands.put("resume")
                         else:
-                            self.pause_music()
+                            self.playback_commands.put("pause")
+
                     elif self.buttons["queue"].collidepoint(mouse_pos):
-                        self.queue_music()
+                        path = self.choose_mp3_file()
+                        if path:
+                            self.queue_commands.put(("queue", path))
+                            self.scroll_to_bottom()
+
                     elif self.buttons["next"].collidepoint(mouse_pos):
-                        self.next_song()
+                        self.queue_commands.put(("next", None))
+
                     elif self.scroll_up_rect.collidepoint(mouse_pos):
                         self.scroll_queue(-1)
+
                     elif self.scroll_down_rect.collidepoint(mouse_pos):
                         self.scroll_queue(1)
 
                 if event.button == 4 and self.queue_card_rect.collidepoint(mouse_pos):
                     self.scroll_queue(-1)
+
                 elif event.button == 5 and self.queue_card_rect.collidepoint(mouse_pos):
                     self.scroll_queue(1)
 
     def draw_ui(self):
-        """
-        Draws the full frontend preview.
-
-        Visual design notes:
-        - dark background for contrast
-        - rounded cards for a modern look
-        - large buttons for easier tapping
-        - separated queue list and scrollbar so items never overlap controls
-        """
         self.screen.fill(self.bg_color)
+
+        with self.lock:
+            current_song = self.current_song
+            current_artist = self.current_artist
+            current_time = self.current_time
+            total_time = self.total_time
+            status = self.status
+            position = self.position
+            song_length = self.song_length
+            queue_items = [self.song_name_from_path(path) for path in self.song_queue]
+            album_art_surface = self.album_art_surface
 
         # Title bar
         pygame.draw.rect(self.screen, self.panel_color, (30, 24, 920, 70), border_radius=24)
@@ -257,90 +414,109 @@ class Running:
         # Main player card
         pygame.draw.rect(self.screen, self.panel_color, (30, 112, 590, 360), border_radius=28)
 
-        # Album art placeholder box
-        pygame.draw.rect(self.screen, self.card_color, (58, 145, 220, 220), border_radius=28)
-        pygame.draw.circle(self.screen, self.soft_accent, (168, 255), 52, width=8)
-        pygame.draw.circle(self.screen, self.soft_accent, (168, 255), 10)
-        self.draw_text("Album Art", self.small_font, self.subtext_color, 125, 388)
+        # Album art
+        album_rect = pygame.Rect(58, 145, 220, 220)
+        pygame.draw.rect(self.screen, self.card_color, album_rect, border_radius=28)
 
-        # Song information
-        self.draw_text(self.current_song, self.header_font, self.text_color, 310, 165)
-        self.draw_text(self.current_artist, self.body_font, self.subtext_color, 310, 205)
+        if album_art_surface:
+            self.screen.blit(album_art_surface, album_rect)
+        else:
+            pygame.draw.circle(self.screen, self.soft_accent, (168, 255), 52, width=8)
+            pygame.draw.circle(self.screen, self.soft_accent, (168, 255), 10)
+            self.draw_text("Album Art", self.small_font, self.subtext_color, 125, 388)
 
-        # Fake progress area
-        self.draw_text(self.current_time, self.body_font, self.text_color, 310, 275)
-        self.draw_text(self.total_time, self.body_font, self.text_color, 535, 275)
+        # Song info
+        self.draw_text(current_song[:24], self.header_font, self.text_color, 310, 165)
+        self.draw_text(current_artist, self.body_font, self.subtext_color, 310, 205)
+
+        # Progress
+        self.draw_text(current_time, self.body_font, self.text_color, 310, 275)
+        self.draw_text(total_time, self.body_font, self.text_color, 535, 275)
+
         pygame.draw.rect(self.screen, self.card_color, (310, 310, 250, 14), border_radius=10)
-        pygame.draw.rect(self.screen, self.accent_color, (310, 310, 96, 14), border_radius=10)
 
-        # Playback status pill
-        play_state = "Paused" if self.is_paused else "Preview Mode"
-        state_color = self.warning_color if self.is_paused else self.success_color
+        progress_width = int(250 * (position / max(1, song_length)))
+        progress_width = min(250, max(0, progress_width))
+
+        pygame.draw.rect(
+            self.screen,
+            self.accent_color,
+            (310, 310, progress_width, 14),
+            border_radius=10
+        )
+
+        # Status
+        if status == "playing":
+            state_text = "Playing"
+            state_color = self.success_color
+        elif status == "paused":
+            state_text = "Paused"
+            state_color = self.warning_color
+        else:
+            state_text = "Idle"
+            state_color = self.subtext_color
+
         pygame.draw.rect(self.screen, self.card_color, (310, 350, 170, 42), border_radius=18)
-        self.draw_text(play_state, self.small_font, state_color, 346, 362)
+        self.draw_text(state_text, self.small_font, state_color, 346, 362)
 
         # Queue card
         pygame.draw.rect(self.screen, self.panel_color, self.queue_card_rect, border_radius=28)
         self.draw_text("Up Next", self.header_font, self.text_color, 680, 145)
-        self.draw_scroll_controls()
-        self.draw_queue_list()
+        self.draw_scroll_controls(len(queue_items))
+        self.draw_queue_list(queue_items)
 
-        # Bottom controls
+        # Controls
         pygame.draw.rect(self.screen, self.panel_color, (30, 490, 920, 120), border_radius=28)
-        self.draw_buttons()
+        self.draw_buttons(status)
 
-    def draw_queue_list(self):
-        """
-        Draws only the visible queue items inside the queue viewport.
-
-        The clip rectangle makes sure songs stay inside the list area
-        and never spill over the scrollbar or outside the box.
-        """
+    def draw_queue_list(self, queue_items):
         old_clip = self.screen.get_clip()
         self.screen.set_clip(self.queue_list_rect)
 
-        visible_items = self.queue_items[
+        visible_items = queue_items[
             self.queue_scroll_index:self.queue_scroll_index + self.visible_queue_count
         ]
 
         item_y = self.queue_list_rect.y
-        item_width = self.queue_list_rect.width
 
         for item in visible_items:
             item_rect = pygame.Rect(
                 self.queue_list_rect.x,
                 item_y,
-                item_width,
+                self.queue_list_rect.width,
                 self.queue_item_height,
             )
+
             pygame.draw.rect(self.screen, self.card_color, item_rect, border_radius=18)
-            self.draw_text(item, self.body_font, self.text_color, item_rect.x + 16, item_rect.y + 17)
+            self.draw_text(item[:16], self.body_font, self.text_color, item_rect.x + 16, item_rect.y + 17)
+
             item_y += self.queue_item_height + self.queue_item_gap
 
-        if not self.queue_items:
+        if not queue_items:
             empty_rect = pygame.Rect(
                 self.queue_list_rect.x,
                 self.queue_list_rect.y,
                 self.queue_list_rect.width,
                 self.queue_item_height,
             )
+
             pygame.draw.rect(self.screen, self.card_color, empty_rect, border_radius=18)
-            self.draw_text("No queued songs", self.body_font, self.subtext_color, empty_rect.x + 16, empty_rect.y + 17)
+            self.draw_text(
+                "No queued songs",
+                self.body_font,
+                self.subtext_color,
+                empty_rect.x + 16,
+                empty_rect.y + 17
+            )
 
         self.screen.set_clip(old_clip)
 
-    def draw_scroll_controls(self):
-        """
-        Draws the separate scrollbar lane for the queue.
-
-        The arrows sit above and below the track.
-        The scroll thumb stays inside the track and does not cover the buttons.
-        """
+    def draw_scroll_controls(self, total_count):
         mouse_pos = pygame.mouse.get_pos()
+
         up_fill = self.soft_accent if self.scroll_up_rect.collidepoint(mouse_pos) else self.card_color
         down_fill = self.soft_accent if self.scroll_down_rect.collidepoint(mouse_pos) else self.card_color
 
-        # Arrow buttons
         pygame.draw.rect(self.screen, up_fill, self.scroll_up_rect, border_radius=12)
         pygame.draw.rect(self.screen, down_fill, self.scroll_down_rect, border_radius=12)
 
@@ -353,6 +529,7 @@ class Running:
                 (self.scroll_up_rect.right - 8, self.scroll_up_rect.bottom - 10),
             ],
         )
+
         pygame.draw.polygon(
             self.screen,
             self.text_color,
@@ -363,18 +540,20 @@ class Running:
             ],
         )
 
-        # Scroll track
         pygame.draw.rect(self.screen, self.scroll_track_color, self.scrollbar_rect, border_radius=16)
 
-        total_items = max(1, len(self.queue_items))
+        total_items = max(1, total_count)
         visible_items = min(self.visible_queue_count, total_items)
+
         thumb_height = max(42, int(self.scrollbar_rect.height * (visible_items / total_items)))
         track_range = self.scrollbar_rect.height - thumb_height
 
-        if self.max_scroll_index() == 0:
+        max_scroll = max(0, total_count - self.visible_queue_count)
+
+        if max_scroll == 0:
             thumb_y = self.scrollbar_rect.y
         else:
-            progress = self.queue_scroll_index / self.max_scroll_index()
+            progress = self.queue_scroll_index / max_scroll
             thumb_y = self.scrollbar_rect.y + int(track_range * progress)
 
         thumb_rect = pygame.Rect(
@@ -383,19 +562,14 @@ class Running:
             self.scrollbar_rect.width - 10,
             thumb_height,
         )
+
         pygame.draw.rect(self.screen, self.scroll_thumb_color, thumb_rect, border_radius=14)
 
-    def draw_buttons(self):
-        """
-        Draws the main control buttons.
-
-        These are big on purpose so the layout is easy to test
-        for touch-friendly spacing.
-        """
-        button_labels = {
+    def draw_buttons(self, status):
+        labels = {
             "load": "Load",
             "play": "Play",
-            "pause": "Resume" if self.is_paused else "Pause",
+            "pause": "Resume" if status == "paused" else "Pause",
             "queue": "Queue",
             "next": "Next",
         }
@@ -403,19 +577,18 @@ class Running:
         mouse_pos = pygame.mouse.get_pos()
 
         for key, rect in self.buttons.items():
-            hovered = rect.collidepoint(mouse_pos)
-            fill = self.soft_accent if hovered else self.accent_color
+            fill = self.soft_accent if rect.collidepoint(mouse_pos) else self.accent_color
+
             pygame.draw.rect(self.screen, fill, rect, border_radius=22)
             pygame.draw.rect(self.screen, self.border_color, rect, width=2, border_radius=22)
 
-            label_surface = self.button_font.render(button_labels[key], True, self.text_color)
-            label_rect = label_surface.get_rect(center=rect.center)
-            self.screen.blit(label_surface, label_rect)
+            text_surface = self.button_font.render(labels[key], True, self.text_color)
+            text_rect = text_surface.get_rect(center=rect.center)
+            self.screen.blit(text_surface, text_rect)
 
     def draw_text(self, text, font, color, x, y):
-        """Small helper for drawing text."""
-        text_surface = font.render(text, True, color)
-        self.screen.blit(text_surface, (x, y))
+        surface = font.render(str(text), True, color)
+        self.screen.blit(surface, (x, y))
 
 
 if __name__ == "__main__":
