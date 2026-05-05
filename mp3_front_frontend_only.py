@@ -23,25 +23,28 @@ class Running:
         self.running = True
 
         # Colors
-        self.bg_color = (14, 18, 28)
-        self.panel_color = (24, 30, 45)
-        self.card_color = (32, 40, 58)
-        self.accent_color = (84, 155, 255)
-        self.soft_accent = (120, 188, 255)
-        self.text_color = (242, 246, 255)
-        self.subtext_color = (182, 190, 210)
-        self.success_color = (84, 204, 138)
-        self.warning_color = (255, 186, 73)
-        self.border_color = (58, 69, 96)
-        self.scroll_track_color = (19, 24, 37)
-        self.scroll_thumb_color = (150, 156, 168)
+        self.bg_color = (18, 18, 18)
+        self.sidebar_color = (0, 0, 0)
+        self.panel_color = (24, 24, 24)
+        self.card_color = (32, 32, 32)
+        self.card_hover_color = (41, 41, 41)
+        self.accent_color = (30, 215, 96)
+        self.soft_accent = (73, 232, 128)
+        self.text_color = (255, 255, 255)
+        self.subtext_color = (179, 179, 179)
+        self.success_color = (30, 215, 96)
+        self.warning_color = (245, 155, 35)
+        self.border_color = (44, 44, 44)
+        self.scroll_track_color = (44, 44, 44)
+        self.scroll_thumb_color = (179, 179, 179)
+        self.bottom_bar_color = (24, 24, 24)
 
         # Fonts
-        self.title_font = pygame.font.SysFont("arial", 34, bold=True)
-        self.header_font = pygame.font.SysFont("arial", 24, bold=True)
-        self.body_font = pygame.font.SysFont("arial", 20)
-        self.small_font = pygame.font.SysFont("arial", 16)
-        self.button_font = pygame.font.SysFont("arial", 22, bold=True)
+        self.title_font = pygame.font.SysFont("helvetica neue", 30, bold=True)
+        self.header_font = pygame.font.SysFont("helvetica neue", 26, bold=True)
+        self.body_font = pygame.font.SysFont("helvetica neue", 20)
+        self.small_font = pygame.font.SysFont("helvetica neue", 15)
+        self.button_font = pygame.font.SysFont("helvetica neue", 18, bold=True)
 
         # Threads
         self.lock = threading.Lock()
@@ -60,6 +63,9 @@ class Running:
         self.song_length = 1
         self.position = 0
         self.status = "idle"
+        self.playback_start_offset = 0
+        self.is_seeking = False
+        self.seek_preview_position = 0
 
         self.album_art_surface = None
 
@@ -69,22 +75,25 @@ class Running:
         # Queue UI
         self.queue_scroll_index = 0
         self.visible_queue_count = 4
-        self.queue_card_rect = pygame.Rect(650, 112, 300, 360)
-        self.queue_list_rect = pygame.Rect(675, 205, 210, 245)
-        self.scrollbar_rect = pygame.Rect(895, 190, 30, 206)
-        self.scroll_up_rect = pygame.Rect(895, 145, 30, 36)
-        self.scroll_down_rect = pygame.Rect(895, 414, 30, 36)
-        self.queue_item_height = 58
-        self.queue_item_gap = 14
+        self.sidebar_rect = pygame.Rect(0, 0, 220, 640)
+        self.main_panel_rect = pygame.Rect(236, 20, 724, 492)
+        self.queue_card_rect = pygame.Rect(676, 84, 250, 332)
+        self.queue_list_rect = pygame.Rect(696, 154, 190, 224)
+        self.scrollbar_rect = pygame.Rect(892, 154, 12, 224)
+        self.scroll_up_rect = pygame.Rect(892, 126, 12, 18)
+        self.scroll_down_rect = pygame.Rect(892, 388, 12, 18)
+        self.queue_item_height = 50
+        self.queue_item_gap = 10
 
         # Buttons
         self.buttons = {
-            "load": pygame.Rect(60, 510, 140, 72),
-            "play": pygame.Rect(220, 510, 140, 72),
-            "pause": pygame.Rect(380, 510, 140, 72),
-            "queue": pygame.Rect(540, 510, 140, 72),
-            "next": pygame.Rect(700, 510, 140, 72),
+            "load": pygame.Rect(318, 557, 118, 42),
+            "play": pygame.Rect(450, 548, 52, 52),
+            "pause": pygame.Rect(516, 557, 118, 42),
+            "queue": pygame.Rect(648, 557, 118, 42),
+            "next": pygame.Rect(780, 557, 118, 42),
         }
+        self.progress_bar_rect = pygame.Rect(438, 610, 268, 6)
 
         self.queue_thread = threading.Thread(target=self.queue_worker, daemon=True)
         self.playback_thread = threading.Thread(target=self.playback_worker, daemon=True)
@@ -154,6 +163,36 @@ class Running:
         except Exception:
             return 1
 
+    def position_from_progress_x(self, mouse_x):
+        relative_x = mouse_x - self.progress_bar_rect.x
+        relative_x = max(0, min(relative_x, self.progress_bar_rect.width))
+        ratio = relative_x / self.progress_bar_rect.width if self.progress_bar_rect.width else 0
+        return int(ratio * max(1, self.song_length))
+
+    def seek_to_position(self, target_seconds):
+        with self.lock:
+            if not self.current_path:
+                return
+            target_seconds = max(0, min(int(target_seconds), max(0, self.song_length)))
+            path = self.current_path
+            status = self.status
+
+        try:
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.play(start=target_seconds)
+            if status == "paused":
+                pygame.mixer.music.pause()
+        except Exception as e:
+            print("Seek error:", e)
+            return
+
+        with self.lock:
+            self.position = target_seconds
+            self.current_time = self.format_time(target_seconds)
+            self.playback_start_offset = target_seconds
+            self.is_seeking = False
+            self.seek_preview_position = target_seconds
+
     def load_song(self, path, autoplay=False):
         song_name = self.song_name_from_path(path)
 
@@ -166,13 +205,16 @@ class Running:
         with self.lock:
             self.current_path = path
             self.current_song = song_name
-            self.current_artist = "Loaded MP3"
+            self.current_artist = "Local file"
             self.position = 0
             self.current_time = "00:00"
             self.song_length = self.estimate_song_length(path)
             self.total_time = self.format_time(self.song_length)
             self.status = "playing" if autoplay else "paused"
             self.album_art_surface = None
+            self.playback_start_offset = 0
+            self.is_seeking = False
+            self.seek_preview_position = 0
 
         self.album_art_commands.put(song_name)
 
@@ -190,6 +232,9 @@ class Running:
                 self.total_time = "--:--"
                 self.status = "idle"
                 self.album_art_surface = None
+                self.playback_start_offset = 0
+                self.is_seeking = False
+                self.seek_preview_position = 0
                 pygame.mixer.music.stop()
                 return
 
@@ -206,7 +251,7 @@ class Running:
                 command, data = self.queue_commands.get(timeout=0.1)
 
                 if command == "load":
-                    self.load_song(data, autoplay=False)
+                    self.load_song(data, autoplay=True)
 
                 elif command == "queue":
                     with self.lock:
@@ -238,10 +283,14 @@ class Running:
                         if status == "paused":
                             pygame.mixer.music.unpause()
                         else:
-                            pygame.mixer.music.play()
+                            with self.lock:
+                                start_at = self.position
+                            pygame.mixer.music.play(start=start_at)
 
                         with self.lock:
                             self.status = "playing"
+                            if status != "paused":
+                                self.playback_start_offset = self.position
                     else:
                         self.load_next_song()
 
@@ -278,10 +327,13 @@ class Running:
                 pos_ms = pygame.mixer.music.get_pos()
 
                 if pos_ms >= 0:
-                    pos_seconds = pos_ms // 1000
                     with self.lock:
-                        self.position = pos_seconds
-                        self.current_time = self.format_time(pos_seconds)
+                        start_offset = self.playback_start_offset
+                    pos_seconds = int(start_offset + (pos_ms / 1000))
+                    clamped_seconds = min(pos_seconds, self.song_length)
+                    with self.lock:
+                        self.position = clamped_seconds
+                        self.current_time = self.format_time(clamped_seconds)
 
                 if not pygame.mixer.music.get_busy():
                     self.load_next_song()
@@ -355,6 +407,15 @@ class Running:
                 mouse_pos = event.pos
 
                 if event.button == 1:
+                    if self.progress_bar_rect.collidepoint(mouse_pos):
+                        with self.lock:
+                            if self.current_path:
+                                self.is_seeking = True
+                                self.seek_preview_position = self.position_from_progress_x(mouse_pos[0])
+                                self.position = self.seek_preview_position
+                                self.current_time = self.format_time(self.seek_preview_position)
+                        continue
+
                     if self.buttons["load"].collidepoint(mouse_pos):
                         path = self.choose_mp3_file()
                         if path:
@@ -393,6 +454,25 @@ class Running:
                 elif event.button == 5 and self.queue_card_rect.collidepoint(mouse_pos):
                     self.scroll_queue(1)
 
+            elif event.type == pygame.MOUSEMOTION:
+                with self.lock:
+                    is_seeking = self.is_seeking
+                    has_song = self.current_path is not None
+                if is_seeking and has_song:
+                    preview_position = self.position_from_progress_x(event.pos[0])
+                    with self.lock:
+                        self.seek_preview_position = preview_position
+                        self.position = preview_position
+                        self.current_time = self.format_time(preview_position)
+
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                with self.lock:
+                    is_seeking = self.is_seeking
+                    has_song = self.current_path is not None
+                if is_seeking and has_song:
+                    target_seconds = self.position_from_progress_x(event.pos[0])
+                    self.seek_to_position(target_seconds)
+
     def draw_ui(self):
         self.screen.fill(self.bg_color)
 
@@ -407,45 +487,36 @@ class Running:
             queue_items = [self.song_name_from_path(path) for path in self.song_queue]
             album_art_surface = self.album_art_surface
 
-        # Title bar
-        pygame.draw.rect(self.screen, self.panel_color, (30, 24, 920, 70), border_radius=24)
-        self.draw_text("MP3 Player", self.title_font, self.text_color, 55, 42)
+        pygame.draw.rect(self.screen, self.sidebar_color, self.sidebar_rect)
+        pygame.draw.rect(self.screen, self.panel_color, self.main_panel_rect, border_radius=18)
+        pygame.draw.rect(self.screen, self.bottom_bar_color, (0, 528, 980, 112))
+        pygame.draw.line(self.screen, self.border_color, (0, 528), (980, 528), 1)
 
-        # Main player card
-        pygame.draw.rect(self.screen, self.panel_color, (30, 112, 590, 360), border_radius=28)
+        self.draw_text("Spotify", self.title_font, self.text_color, 28, 26)
+        self.draw_text("Home", self.body_font, self.text_color, 28, 92)
+        self.draw_text("Search", self.body_font, self.subtext_color, 28, 126)
+        self.draw_text("Your Library", self.body_font, self.subtext_color, 28, 160)
+        self.draw_text("NOW PLAYING", self.small_font, self.subtext_color, 268, 48)
+        self.draw_text("Made For You", self.small_font, self.subtext_color, 676, 48)
+        self.draw_text("Liked Songs", self.body_font, self.text_color, 28, 238)
+        self.draw_text("Local Queue", self.body_font, self.text_color, 28, 274)
 
-        # Album art
-        album_rect = pygame.Rect(58, 145, 220, 220)
-        pygame.draw.rect(self.screen, self.card_color, album_rect, border_radius=28)
+        hero_rect = pygame.Rect(264, 84, 388, 332)
+        pygame.draw.rect(self.screen, self.card_color, hero_rect, border_radius=20)
+
+        album_rect = pygame.Rect(292, 114, 188, 188)
+        pygame.draw.rect(self.screen, (24, 24, 24), album_rect, border_radius=12)
 
         if album_art_surface:
             self.screen.blit(album_art_surface, album_rect)
         else:
-            pygame.draw.circle(self.screen, self.soft_accent, (168, 255), 52, width=8)
-            pygame.draw.circle(self.screen, self.soft_accent, (168, 255), 10)
-            self.draw_text("Album Art", self.small_font, self.subtext_color, 125, 388)
+            pygame.draw.circle(self.screen, self.soft_accent, album_rect.center, 48, width=6)
+            pygame.draw.circle(self.screen, self.soft_accent, album_rect.center, 8)
+            self.draw_text("Album Art", self.small_font, self.subtext_color, 344, 318)
 
-        # Song info
-        self.draw_text(current_song[:24], self.header_font, self.text_color, 310, 165)
-        self.draw_text(current_artist, self.body_font, self.subtext_color, 310, 205)
+        self.draw_text(current_song, self.header_font, self.text_color, 292, 328, max_width=330)
+        self.draw_text(current_artist, self.body_font, self.subtext_color, 292, 364, max_width=330)
 
-        # Progress
-        self.draw_text(current_time, self.body_font, self.text_color, 310, 275)
-        self.draw_text(total_time, self.body_font, self.text_color, 535, 275)
-
-        pygame.draw.rect(self.screen, self.card_color, (310, 310, 250, 14), border_radius=10)
-
-        progress_width = int(250 * (position / max(1, song_length)))
-        progress_width = min(250, max(0, progress_width))
-
-        pygame.draw.rect(
-            self.screen,
-            self.accent_color,
-            (310, 310, progress_width, 14),
-            border_radius=10
-        )
-
-        # Status
         if status == "playing":
             state_text = "Playing"
             state_color = self.success_color
@@ -456,18 +527,39 @@ class Running:
             state_text = "Idle"
             state_color = self.subtext_color
 
-        pygame.draw.rect(self.screen, self.card_color, (310, 350, 170, 42), border_radius=18)
-        self.draw_text(state_text, self.small_font, state_color, 346, 362)
+        pygame.draw.rect(self.screen, (18, 18, 18), (292, 398, 104, 32), border_radius=16)
+        self.draw_text(state_text, self.small_font, state_color, 320, 406)
 
-        # Queue card
-        pygame.draw.rect(self.screen, self.panel_color, self.queue_card_rect, border_radius=28)
-        self.draw_text("Up Next", self.header_font, self.text_color, 680, 145)
+        pygame.draw.rect(self.screen, self.card_color, self.queue_card_rect, border_radius=18)
+        self.draw_text("Queue", self.header_font, self.text_color, 696, 110)
+        self.draw_text(f"{len(queue_items)} track(s)", self.small_font, self.subtext_color, 696, 136)
         self.draw_scroll_controls(len(queue_items))
         self.draw_queue_list(queue_items)
 
-        # Controls
-        pygame.draw.rect(self.screen, self.panel_color, (30, 490, 920, 120), border_radius=28)
+        self.draw_bottom_now_playing(current_song, current_artist, album_art_surface)
+
+        pygame.draw.rect(self.screen, self.scroll_track_color, self.progress_bar_rect, border_radius=10)
+
+        progress_width = int(self.progress_bar_rect.width * (position / max(1, song_length)))
+        progress_width = min(self.progress_bar_rect.width, max(0, progress_width))
+
+        pygame.draw.rect(
+            self.screen,
+            self.accent_color,
+            (self.progress_bar_rect.x, self.progress_bar_rect.y, progress_width, self.progress_bar_rect.height),
+            border_radius=10
+        )
+        thumb_center_x = self.progress_bar_rect.x + progress_width
+        thumb_center_x = max(self.progress_bar_rect.x + 6, min(thumb_center_x, self.progress_bar_rect.right - 6))
+        pygame.draw.circle(
+            self.screen,
+            self.text_color,
+            (thumb_center_x, self.progress_bar_rect.centery),
+            6
+        )
         self.draw_buttons(status)
+        self.draw_text(current_time, self.small_font, self.subtext_color, 398, 603)
+        self.draw_text(total_time, self.small_font, self.subtext_color, 718, 603)
 
     def draw_queue_list(self, queue_items):
         old_clip = self.screen.get_clip()
@@ -487,8 +579,9 @@ class Running:
                 self.queue_item_height,
             )
 
-            pygame.draw.rect(self.screen, self.card_color, item_rect, border_radius=18)
-            self.draw_text(item[:16], self.body_font, self.text_color, item_rect.x + 16, item_rect.y + 17)
+            pygame.draw.rect(self.screen, self.card_hover_color, item_rect, border_radius=12)
+            self.draw_text(item, self.body_font, self.text_color, item_rect.x + 14, item_rect.y + 8, max_width=145)
+            self.draw_text("Queued track", self.small_font, self.subtext_color, item_rect.x + 14, item_rect.y + 28)
 
             item_y += self.queue_item_height + self.queue_item_gap
 
@@ -500,13 +593,13 @@ class Running:
                 self.queue_item_height,
             )
 
-            pygame.draw.rect(self.screen, self.card_color, empty_rect, border_radius=18)
+            pygame.draw.rect(self.screen, self.card_hover_color, empty_rect, border_radius=12)
             self.draw_text(
                 "No queued songs",
-                self.body_font,
+                self.small_font,
                 self.subtext_color,
                 empty_rect.x + 16,
-                empty_rect.y + 17
+                empty_rect.y + 16
             )
 
         self.screen.set_clip(old_clip)
@@ -514,19 +607,19 @@ class Running:
     def draw_scroll_controls(self, total_count):
         mouse_pos = pygame.mouse.get_pos()
 
-        up_fill = self.soft_accent if self.scroll_up_rect.collidepoint(mouse_pos) else self.card_color
-        down_fill = self.soft_accent if self.scroll_down_rect.collidepoint(mouse_pos) else self.card_color
+        up_fill = self.scroll_thumb_color if self.scroll_up_rect.collidepoint(mouse_pos) else self.scroll_track_color
+        down_fill = self.scroll_thumb_color if self.scroll_down_rect.collidepoint(mouse_pos) else self.scroll_track_color
 
-        pygame.draw.rect(self.screen, up_fill, self.scroll_up_rect, border_radius=12)
-        pygame.draw.rect(self.screen, down_fill, self.scroll_down_rect, border_radius=12)
+        pygame.draw.rect(self.screen, up_fill, self.scroll_up_rect, border_radius=8)
+        pygame.draw.rect(self.screen, down_fill, self.scroll_down_rect, border_radius=8)
 
         pygame.draw.polygon(
             self.screen,
             self.text_color,
             [
-                (self.scroll_up_rect.centerx, self.scroll_up_rect.y + 10),
-                (self.scroll_up_rect.x + 8, self.scroll_up_rect.bottom - 10),
-                (self.scroll_up_rect.right - 8, self.scroll_up_rect.bottom - 10),
+                (self.scroll_up_rect.centerx, self.scroll_up_rect.y + 4),
+                (self.scroll_up_rect.x + 3, self.scroll_up_rect.bottom - 4),
+                (self.scroll_up_rect.right - 3, self.scroll_up_rect.bottom - 4),
             ],
         )
 
@@ -534,18 +627,18 @@ class Running:
             self.screen,
             self.text_color,
             [
-                (self.scroll_down_rect.centerx, self.scroll_down_rect.bottom - 10),
-                (self.scroll_down_rect.x + 8, self.scroll_down_rect.y + 10),
-                (self.scroll_down_rect.right - 8, self.scroll_down_rect.y + 10),
+                (self.scroll_down_rect.centerx, self.scroll_down_rect.bottom - 4),
+                (self.scroll_down_rect.x + 3, self.scroll_down_rect.y + 4),
+                (self.scroll_down_rect.right - 3, self.scroll_down_rect.y + 4),
             ],
         )
 
-        pygame.draw.rect(self.screen, self.scroll_track_color, self.scrollbar_rect, border_radius=16)
+        pygame.draw.rect(self.screen, self.scroll_track_color, self.scrollbar_rect, border_radius=8)
 
         total_items = max(1, total_count)
         visible_items = min(self.visible_queue_count, total_items)
 
-        thumb_height = max(42, int(self.scrollbar_rect.height * (visible_items / total_items)))
+        thumb_height = max(36, int(self.scrollbar_rect.height * (visible_items / total_items)))
         track_range = self.scrollbar_rect.height - thumb_height
 
         max_scroll = max(0, total_count - self.visible_queue_count)
@@ -559,16 +652,16 @@ class Running:
         thumb_rect = pygame.Rect(
             self.scrollbar_rect.x + 5,
             thumb_y,
-            self.scrollbar_rect.width - 10,
+            self.scrollbar_rect.width - 4,
             thumb_height,
         )
 
-        pygame.draw.rect(self.screen, self.scroll_thumb_color, thumb_rect, border_radius=14)
+        pygame.draw.rect(self.screen, self.scroll_thumb_color, thumb_rect, border_radius=8)
 
     def draw_buttons(self, status):
         labels = {
             "load": "Load",
-            "play": "Play",
+            "play": "",
             "pause": "Resume" if status == "paused" else "Pause",
             "queue": "Queue",
             "next": "Next",
@@ -577,16 +670,51 @@ class Running:
         mouse_pos = pygame.mouse.get_pos()
 
         for key, rect in self.buttons.items():
-            fill = self.soft_accent if rect.collidepoint(mouse_pos) else self.accent_color
+            if key == "play":
+                fill = self.soft_accent if rect.collidepoint(mouse_pos) else self.accent_color
+                pygame.draw.ellipse(self.screen, fill, rect)
+                self.draw_play_icon(rect)
+                continue
 
-            pygame.draw.rect(self.screen, fill, rect, border_radius=22)
-            pygame.draw.rect(self.screen, self.border_color, rect, width=2, border_radius=22)
+            fill = self.card_hover_color if rect.collidepoint(mouse_pos) else self.card_color
+            pygame.draw.rect(self.screen, fill, rect, border_radius=21)
 
             text_surface = self.button_font.render(labels[key], True, self.text_color)
             text_rect = text_surface.get_rect(center=rect.center)
             self.screen.blit(text_surface, text_rect)
 
-    def draw_text(self, text, font, color, x, y):
+    def draw_play_icon(self, rect):
+        pygame.draw.polygon(
+            self.screen,
+            (0, 0, 0),
+            [
+                (rect.x + 20, rect.y + 14),
+                (rect.right - 16, rect.centery),
+                (rect.x + 20, rect.bottom - 14),
+            ],
+        )
+
+    def draw_bottom_now_playing(self, current_song, current_artist, album_art_surface):
+        mini_art_rect = pygame.Rect(18, 546, 76, 76)
+        pygame.draw.rect(self.screen, self.card_hover_color, mini_art_rect, border_radius=8)
+        if album_art_surface:
+            mini_surface = pygame.transform.smoothscale(album_art_surface, (76, 76))
+            self.screen.blit(mini_surface, mini_art_rect)
+        else:
+            pygame.draw.circle(self.screen, self.soft_accent, mini_art_rect.center, 18, width=3)
+            pygame.draw.circle(self.screen, self.soft_accent, mini_art_rect.center, 4)
+
+        self.draw_text(current_song, self.body_font, self.text_color, 108, 562, max_width=180)
+        self.draw_text(current_artist, self.small_font, self.subtext_color, 108, 589, max_width=180)
+
+    def draw_text(self, text, font, color, x, y, max_width=None):
+        text = str(text)
+        if max_width is not None:
+            original = text
+            while text and font.size(text + "...")[0] > max_width:
+                text = text[:-1]
+            if text != original:
+                text += "..."
         surface = font.render(str(text), True, color)
         self.screen.blit(surface, (x, y))
 
