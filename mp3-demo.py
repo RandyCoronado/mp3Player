@@ -73,6 +73,8 @@ class Running:
         self.message = "Load plays a file. Queue adds files to Up Next."
         self.art_message = ""
         self.album_art_surface = None
+        self.playback_start_offset = 0
+        self.waiting_for_next_song = False
 
         # Visible queue: list[dict]
         self.queue_items = []
@@ -193,8 +195,18 @@ class Running:
         except Exception:
             return None
 
-    def search_itunes_album_art(self, title, artist):
-        query_parts = [title or "", artist or ""]
+    def is_generic_artist(self, artist):
+        return not artist or str(artist).strip().lower() in {
+            "unknown artist",
+            "reading tags...",
+            "choose load or queue",
+            "queue is empty",
+        }
+
+    def search_itunes_metadata(self, title, artist):
+        query_parts = [title or ""]
+        if artist and not self.is_generic_artist(artist):
+            query_parts.append(artist)
         term = quote_plus(" ".join(part for part in query_parts if part).strip())
         if not term:
             return None
@@ -209,20 +221,31 @@ class Running:
             if not results:
                 return None
 
-            artwork_url = results[0].get("artworkUrl100")
-            if not artwork_url:
-                return None
+            result = results[0]
+            metadata = {
+                "title": result.get("trackName") or title,
+                "artist": result.get("artistName") or artist,
+                "length": int(result.get("trackTimeMillis", 0) / 1000) if result.get("trackTimeMillis") else 0,
+                "art": None,
+            }
 
-            # Ask iTunes for a larger square image when available.
-            artwork_url = artwork_url.replace("100x100bb", "600x600bb")
-            art_request = Request(artwork_url, headers={"User-Agent": "PygameMP3Player/1.0"})
-            with urlopen(art_request, timeout=6) as art_response:
-                return art_response.read()
+            artwork_url = result.get("artworkUrl100")
+            if artwork_url:
+                artwork_url = artwork_url.replace("100x100bb", "600x600bb")
+                art_request = Request(artwork_url, headers={"User-Agent": "PygameMP3Player/1.0"})
+                with urlopen(art_request, timeout=6) as art_response:
+                    metadata["art"] = art_response.read()
+            return metadata
         except Exception:
             return None
 
-    def request_itunes_album_art(self, path, title, artist):
-        self.album_art_commands.put({"path": path, "title": title, "artist": artist})
+    def request_itunes_metadata(self, path, title, artist, target="current"):
+        self.album_art_commands.put({
+            "path": path,
+            "title": title,
+            "artist": artist,
+            "target": target,
+        })
 
     def process_ui_updates(self):
         while True:
@@ -231,20 +254,45 @@ class Running:
             except queue.Empty:
                 break
 
-            if update.get("type") == "album_art":
+            if update.get("type") == "itunes_metadata":
+                itunes = update.get("metadata") or {}
+                target = update.get("target", "current")
+
+                if target == "queue":
+                    with self.lock:
+                        for item in self.queue_items:
+                            if item["path"] == update.get("path"):
+                                if itunes.get("title") and item.get("title") == self.display_name(item["path"]):
+                                    item["title"] = itunes["title"]
+                                if itunes.get("artist") and self.is_generic_artist(item.get("artist")):
+                                    item["artist"] = itunes["artist"]
+                                if not item.get("length") and itunes.get("length"):
+                                    item["length"] = itunes["length"]
+                                break
+                    continue
+
                 with self.lock:
                     still_current = update.get("path") == self.current_path
                 if not still_current:
                     continue
-                surface = self.art_surface_from_bytes(update.get("art"))
-                if surface:
-                    with self.lock:
+
+                surface = self.art_surface_from_bytes(itunes.get("art"))
+                with self.lock:
+                    if self.is_generic_artist(self.current_artist) and itunes.get("artist"):
+                        self.current_artist = itunes["artist"]
+                    if itunes.get("title") and self.current_song == self.display_name(self.current_path):
+                        self.current_song = itunes["title"]
+                    if not self.song_length and itunes.get("length"):
+                        self.song_length = itunes["length"]
+                        self.total_time = self.format_time(self.song_length)
+                    if surface:
                         self.album_art_surface = surface
                         self.art_message = "Album art loaded from iTunes."
-                        self.message = "Album art loaded from iTunes."
-                else:
-                    with self.lock:
-                        self.art_message = "No iTunes artwork found."
+                    else:
+                        if not self.album_art_surface:
+                            self.art_message = "No iTunes artwork found."
+                        if itunes.get("artist"):
+                            self.message = "Artist loaded from iTunes."
 
     def max_scroll_index(self):
         with self.lock:
@@ -269,13 +317,16 @@ class Running:
                 self.song_length = meta["length"]
                 self.total_time = self.format_time(meta["length"])
                 self.position = 0
+                self.playback_start_offset = 0
+                self.waiting_for_next_song = False
                 self.current_time = "00:00"
                 self.album_art_surface = art_surface
                 self.art_message = "Using embedded album art." if art_surface else "Searching iTunes for album art..."
                 self.status = "playing"
                 self.message = f"Playing: {self.current_song}"
-            if not art_surface:
-                self.request_itunes_album_art(path, meta["title"], meta["artist"])
+            # Ask iTunes for missing artwork and/or a better artist name.
+            if (not art_surface) or self.is_generic_artist(meta["artist"]):
+                self.request_itunes_metadata(path, meta["title"], meta["artist"], target="current")
         except Exception as exc:
             with self.lock:
                 self.status = "error"
@@ -290,6 +341,8 @@ class Running:
                 self.current_artist = "Queue is empty"
                 self.song_length = 0
                 self.position = 0
+                self.playback_start_offset = 0
+                self.waiting_for_next_song = False
                 self.current_time = "00:00"
                 self.total_time = "00:00"
                 self.album_art_surface = None
@@ -348,11 +401,16 @@ class Running:
                     pygame.mixer.music.unpause()
                     with self.lock:
                         self.status = "playing"
+                        self.waiting_for_next_song = False
                         self.message = "Resumed."
                 elif has_song and status != "playing":
-                    pygame.mixer.music.play(start=self.position)
                     with self.lock:
+                        start_at = self.position
+                    pygame.mixer.music.play(start=start_at)
+                    with self.lock:
+                        self.playback_start_offset = start_at
                         self.status = "playing"
+                        self.waiting_for_next_song = False
                 elif not has_song:
                     self.play_next_from_queue()
                 else:
@@ -369,6 +427,7 @@ class Running:
                 with self.lock:
                     if self.status == "paused":
                         self.status = "playing"
+                        self.waiting_for_next_song = False
                         self.message = "Resumed."
             elif command == "next":
                 self.queue_commands.put(("next", None))
@@ -389,6 +448,8 @@ class Running:
                         if item["path"] == path:
                             item.update({"title": meta["title"], "artist": meta["artist"], "length": meta["length"]})
                             break
+                if self.is_generic_artist(meta.get("artist")) or not meta.get("length"):
+                    self.request_itunes_metadata(path, meta["title"], meta["artist"], target="queue")
 
     # THREAD 4: iTunes album art fetcher
     def album_art_worker(self):
@@ -400,8 +461,13 @@ class Running:
             if job == "quit":
                 break
 
-            art_bytes = self.search_itunes_album_art(job.get("title"), job.get("artist"))
-            self.ui_updates.put({"type": "album_art", "path": job.get("path"), "art": art_bytes})
+            metadata = self.search_itunes_metadata(job.get("title"), job.get("artist"))
+            self.ui_updates.put({
+                "type": "itunes_metadata",
+                "path": job.get("path"),
+                "target": job.get("target", "current"),
+                "metadata": metadata,
+            })
 
     # THREAD 5: timer / song end detection
     def timer_worker(self):
@@ -410,18 +476,30 @@ class Running:
             with self.lock:
                 status = self.status
                 length = self.song_length
+                start_offset = self.playback_start_offset
+                already_advancing = self.waiting_for_next_song
+
             if status != "playing":
                 continue
 
-            mixer_pos = pygame.mixer.music.get_pos() / 1000.0
-            if mixer_pos >= 0:
+            mixer_seconds = pygame.mixer.music.get_pos() / 1000.0
+            if mixer_seconds >= 0:
+                new_position = int(start_offset + mixer_seconds)
+                if length:
+                    new_position = min(new_position, length)
                 with self.lock:
-                    self.position = int(mixer_pos)
+                    self.position = new_position
                     self.current_time = self.format_time(self.position)
 
-            if length and self.position >= length - 1:
-                self.queue_commands.put(("next", None))
-            elif not pygame.mixer.music.get_busy():
+            with self.lock:
+                position = self.position
+                already_advancing = self.waiting_for_next_song
+
+            song_finished_by_time = bool(length and position >= length)
+            song_finished_by_mixer = (position > 0 or mixer_seconds > 1) and not pygame.mixer.music.get_busy()
+            if (song_finished_by_time or song_finished_by_mixer) and not already_advancing:
+                with self.lock:
+                    self.waiting_for_next_song = True
                 self.queue_commands.put(("next", None))
 
     def shutdown(self):
@@ -555,7 +633,7 @@ class Running:
             self.draw_text(item.get("title", "Unknown"), self.body_font, self.text_color, item_rect.x + 16, item_rect.y + 10, max_width=170)
             artist = item.get("artist", "")
             length = self.format_time(item.get("length", 0)) if item.get("length", 0) else "--:--"
-            self.draw_text(f"{artist}  {length}", self.small_font, self.subtext_color, item_rect.x + 16, item_rect.y + 34, max_width=175)
+            self.draw_text(f"{artist} - {length}", self.small_font, self.subtext_color, item_rect.x + 16, item_rect.y + 34, max_width=175)
             item_y += self.queue_item_height + self.queue_item_gap
 
         if not queue_items:
